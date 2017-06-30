@@ -105,8 +105,10 @@ int main(int argc, char const *const *argv) {
 
     while(RTMP_ReadPacket(receiver,packet)) {
         if(RTMPPacket_IsReady(packet)) {
-            for(i=0; i<num_senders; i++) {
-                RTMP_SendPacket(senders[i],packet,0);
+            if(RTMP_ClientPacket(receiver,packet) == 1) { /* Audio/Video/Metadata packet */
+                for(i=0; i<num_senders; i++) {
+                    RTMP_SendPacket(senders[i],packet,0);
+                }
             }
             RTMPPacket_Free(packet);
         }
