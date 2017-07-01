@@ -1,10 +1,11 @@
 #include <librtmp/rtmp.h>
+#include <librtmp/log.h>
 #include <skalibs/skalibs.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #define VERSION "1.0.0"
-#define USAGE "rtmprelay src dest"
+#define USAGE "rtmprelay src dest [dest ...]"
 #define dieusage() strerr_dieusage(100, USAGE)
 
 int main(int argc, char const *const *argv) {
@@ -13,6 +14,7 @@ int main(int argc, char const *const *argv) {
     int opt = 0;
     int i = 0;
     int num_senders = 0;
+    int streaming = 1;
 
     RTMP *receiver = 0;
     RTMP **senders = 0;
@@ -103,13 +105,23 @@ int main(int argc, char const *const *argv) {
 
     RTMPPacket_Reset(packet);
 
-    while(RTMP_ReadPacket(receiver,packet)) {
+    while(streaming) {
+        if(!RTMP_ReadPacket(receiver,packet)) {
+            break;
+        }
         if(RTMPPacket_IsReady(packet)) {
             if(RTMP_ClientPacket(receiver,packet) == 1) { /* Audio/Video/Metadata packet */
                 for(i=0; i<num_senders; i++) {
                     RTMP_SendPacket(senders[i],packet,0);
                 }
             }
+            else if(packet->m_packetType == RTMP_PACKET_TYPE_CONTROL &&
+                    AMF_DecodeInt16(packet->m_body) == 1) {
+                /* deleteStream */
+                streaming = 0;
+            }
+
+            RTMPPacket_Dump(packet);
             RTMPPacket_Free(packet);
         }
     }
