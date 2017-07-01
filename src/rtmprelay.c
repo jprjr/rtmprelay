@@ -3,6 +3,8 @@
 #include <skalibs/skalibs.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <termios.h>
 
 #define VERSION "1.0.0"
 #define USAGE "rtmprelay src dest [dest ...]"
@@ -15,6 +17,12 @@ int main(int argc, char const *const *argv) {
     int i = 0;
     int num_senders = 0;
     int streaming = 1;
+    const int fds_len = 2;
+    iopause_fd fds[2];
+    int events;
+    int retval = 0;
+    char buf[1];
+    static struct termios oldt, newt;
 
     RTMP *receiver = 0;
     RTMP **senders = 0;
@@ -44,6 +52,14 @@ int main(int argc, char const *const *argv) {
     if(argc < 2) dieusage() ;
     num_senders = argc - 1;
 
+    memset(fds,0,sizeof(iopause_fd)*fds_len);
+
+    tcgetattr( STDIN_FILENO, &oldt);
+    tcgetattr( STDIN_FILENO, &newt);
+
+    newt.c_lflag &= ~(ICANON);
+    tcsetattr( STDIN_FILENO, TCSANOW, &newt);
+
     receiver = RTMP_Alloc();
     if(receiver == 0) {
         strerr_diefu1sys(111, "failed to initialize rtmp library");
@@ -63,6 +79,14 @@ int main(int argc, char const *const *argv) {
     if(!RTMP_ConnectStream(receiver,0)) {
         strerr_diefu1sys(111, "failed to connect");
     }
+
+    fds[0].fd = STDIN_FILENO;
+    fds[0].events = IOPAUSE_READ;
+    fds[0].revents = 0;
+
+    fds[1].fd = RTMP_Socket(receiver);
+    fds[1].events = IOPAUSE_READ;
+    fds[1].revents = 0;
 
     senders = (RTMP **)malloc(sizeof(RTMP *) * num_senders);
 
@@ -102,13 +126,35 @@ int main(int argc, char const *const *argv) {
     }
 
     memset(packet,0,sizeof(RTMPPacket));
-
     RTMPPacket_Reset(packet);
 
     while(streaming) {
+
+        events = iopause(fds,fds_len,0,0);
+
+        if(events <= 0) {
+            retval = 1;
+            break;
+        }
+
+        if (fds[0].revents & IOPAUSE_READ) {
+            fds[0].revents = 0;
+            if(fd_read(fds[0].fd,buf,1)) {
+                if(buf[0] == 'q' || buf[0] == 'Q') {
+                    streaming = 0;
+                    continue;
+                }
+            }
+        }
+
+        if(! (fds[1].revents & IOPAUSE_READ) ) {
+            continue;
+        }
+
         if(!RTMP_ReadPacket(receiver,packet)) {
             break;
         }
+
         if(RTMPPacket_IsReady(packet)) {
             if(RTMP_ClientPacket(receiver,packet) == 1) { /* Audio/Video/Metadata packet */
                 for(i=0; i<num_senders; i++) {
@@ -134,5 +180,7 @@ int main(int argc, char const *const *argv) {
         RTMP_Free(senders[i]);
     }
 
-    return 0;
+    tcsetattr( STDIN_FILENO, TCSANOW, &oldt);
+
+    return retval;
 }
